@@ -98,6 +98,15 @@ git commit -m "备注"
 git push origin study
 ```
 
+## 六、Github仓库Git配置
+
+仅当前仓库
+
+```shell
+git config user.name "Lionel"
+git config user.email "codingoer@163.com"
+```
+
 ---
 
 ### 总结
