@@ -46,7 +46,9 @@ public class DefaultSecurityConfig {
 		http
 			.authorizeHttpRequests(authorize ->
 				authorize
-					.requestMatchers("/assets/**", "/login").permitAll()
+						// well-known, 是Chrome/DevTools 的探测请求，不属于 OAuth 业务接口。
+						// 若该路径返回 404，通常不影响 OAuth 流程，但在某些本地调试场景下可能干扰回跳体验
+					.requestMatchers("/assets/**", "/login", "/.well-known/appspecific/**").permitAll()
 					.anyRequest().authenticated()
 			)
 			.formLogin(formLogin ->

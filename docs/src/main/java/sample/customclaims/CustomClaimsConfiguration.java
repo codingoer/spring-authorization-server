@@ -30,6 +30,8 @@ public class CustomClaimsConfiguration {
 				context.getClaims().claims((claims) -> {
 					claims.put("claim-1", "value-1");
 					claims.put("claim-2", "value-2");
+					// the same as ROOT/examples/docs-src/main/java/sample/customclaims/CustomClaimsConfiguration.java
+					claims.put("claim-3", "value-3");
 				});
 			}
 		};
