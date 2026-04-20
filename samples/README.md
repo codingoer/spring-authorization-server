@@ -62,6 +62,31 @@
 2026-04-19T18:15:22.370+08:00  INFO 42233 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on ports 8443 (https), 8090 (http) with context path ''
 ```
 
+### `users-resource`（与 `messages-resource` 对比）
+
+- 两者都属于资源服务，但职责不同：
+  - `messages-resource`：最终下游资源服务，直接校验 token 并返回 `/messages`
+  - `users-resource`：中间层资源服务，接收上游请求后通过 Token Exchange 获取/转换 token，再调用 `messages-resource`
+- 如果你只想验证“demo-client 带 token 调资源服务”，只启动 `messages-resource` 就可以。
+- 如果你要验证“多跳微服务中的 token 传递与转换”（delegation / impersonation），需要启动 `users-resource`。
+- `Token Exchange` 不是 demo 私有协议，使用的是 OAuth2 标准扩展（RFC 8693），对应授权类型值：
+  - `urn:ietf:params:oauth:grant-type:token-exchange`
+
+### `spa-client`
+
+- `spa-client` 是 Angular 前端，配合 `backend-for-spa-client` 实现 BFF（Backend For Frontend）模式。
+- 启动方式：
+  - 进入目录：`samples/spa-client`
+  - 首次启动先安装依赖：`npm install`
+  - 启动开发服务器：`ng serve`
+  - 访问地址：`http://127.0.0.1:4200`
+- 运行前建议先启动：
+  - `demo-authorizationserver`
+  - `messages-resource`
+  - `backend-for-spa-client`
+- 如果本机没有 Angular CLI，可先安装：
+  - `npm install -g @angular/cli`
+
 ## 配对启动建议
 
 ### 1) Demo 组合（推荐先学）
@@ -109,5 +134,6 @@
 ./gradlew -b samples/backend-for-spa-client/samples-backend-for-spa-client.gradle bootRun
 
 # SPA frontend (in samples/spa-client)
+npm install
 ng serve
 ```
