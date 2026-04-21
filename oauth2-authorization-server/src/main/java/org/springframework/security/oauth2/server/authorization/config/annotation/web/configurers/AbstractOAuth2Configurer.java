@@ -21,6 +21,7 @@ import org.springframework.security.web.util.matcher.RequestMatcher;
 
 /**
  * Base configurer for an OAuth 2.0 component (e.g. protocol endpoint).
+ * Oauth 2.0 组件的基配置器（例如协议端点）
  *
  * @author Joe Grandja
  * @since 0.1.2

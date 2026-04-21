@@ -53,6 +53,7 @@ import org.springframework.util.StringUtils;
 
 /**
  * Configurer for the OAuth 2.0 Authorization Endpoint.
+ * Oauth 2.0 授权端点配置器
  *
  * @author Joe Grandja
  * @since 0.1.2
@@ -61,6 +62,7 @@ import org.springframework.util.StringUtils;
  */
 public final class OAuth2AuthorizationEndpointConfigurer extends AbstractOAuth2Configurer {
 
+	// 授权端点请求匹配器，匹配Token 端点请求
 	private RequestMatcher requestMatcher;
 
 	private final List<AuthenticationConverter> authorizationRequestConverters = new ArrayList<>();
@@ -244,6 +246,7 @@ public final class OAuth2AuthorizationEndpointConfigurer extends AbstractOAuth2C
 		this.requestMatcher = new OrRequestMatcher(
 				new AntPathRequestMatcher(authorizationEndpointUri, HttpMethod.GET.name()),
 				new AntPathRequestMatcher(authorizationEndpointUri, HttpMethod.POST.name()));
+		// 组装Providers
 		List<AuthenticationProvider> authenticationProviders = createDefaultAuthenticationProviders(httpSecurity);
 		if (!this.authenticationProviders.isEmpty()) {
 			authenticationProviders.addAll(0, this.authenticationProviders);
@@ -262,8 +265,10 @@ public final class OAuth2AuthorizationEndpointConfigurer extends AbstractOAuth2C
 				? OAuth2ConfigurerUtils
 					.withMultipleIssuersPattern(authorizationServerSettings.getAuthorizationEndpoint())
 				: authorizationServerSettings.getAuthorizationEndpoint();
+		// 创建 OAuth2AuthorizationEndpointFilter
 		OAuth2AuthorizationEndpointFilter authorizationEndpointFilter = new OAuth2AuthorizationEndpointFilter(
 				authenticationManager, authorizationEndpointUri);
+		// 组装Converter
 		List<AuthenticationConverter> authenticationConverters = createDefaultAuthenticationConverters();
 		if (!this.authorizationRequestConverters.isEmpty()) {
 			authenticationConverters.addAll(0, this.authorizationRequestConverters);

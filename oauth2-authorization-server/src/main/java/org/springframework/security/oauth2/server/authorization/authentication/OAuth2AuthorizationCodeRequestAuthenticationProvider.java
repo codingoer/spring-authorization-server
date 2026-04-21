@@ -258,6 +258,7 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationProvider implemen
 				throwError("consent_required", "prompt", authorizationCodeRequestAuthentication, registeredClient);
 			}
 
+			// 授权服务器生成state
 			String state = DEFAULT_STATE_GENERATOR.generateKey();
 			OAuth2Authorization authorization = authorizationBuilder(registeredClient, principal, authorizationRequest)
 				.attribute(OAuth2ParameterNames.STATE, state)
@@ -295,6 +296,7 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationProvider implemen
 
 		OAuth2TokenContext tokenContext = createAuthorizationCodeTokenContext(authorizationCodeRequestAuthentication,
 				registeredClient, null, authorizationRequest.getScopes());
+		// generate authorization code
 		OAuth2AuthorizationCode authorizationCode = this.authorizationCodeGenerator.generate(tokenContext);
 		if (authorizationCode == null) {
 			OAuth2Error error = new OAuth2Error(OAuth2ErrorCodes.SERVER_ERROR,
@@ -408,11 +410,13 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationProvider implemen
 			return false;
 		}
 		// 'openid' scope does not require consent
+		// scope只有openid 不需要同意
 		if (authenticationContext.getAuthorizationRequest().getScopes().contains(OidcScopes.OPENID)
 				&& authenticationContext.getAuthorizationRequest().getScopes().size() == 1) {
 			return false;
 		}
 
+		// 用户之前已同意过所有请求的 scope
 		if (authenticationContext.getAuthorizationConsent() != null && authenticationContext.getAuthorizationConsent()
 			.getScopes()
 			.containsAll(authenticationContext.getAuthorizationRequest().getScopes())) {

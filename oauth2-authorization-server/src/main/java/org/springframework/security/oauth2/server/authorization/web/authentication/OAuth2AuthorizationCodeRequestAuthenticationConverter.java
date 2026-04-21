@@ -117,6 +117,7 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationConverter impleme
 			throwError(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.CLIENT_ID);
 		}
 
+		// 从session中获取用户身份
 		Authentication principal = SecurityContextHolder.getContext().getAuthentication();
 		if (principal == null) {
 			principal = ANONYMOUS_AUTHENTICATION;

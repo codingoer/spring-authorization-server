@@ -101,14 +101,14 @@ public class AuthorizationServerConfig {
 
 		// @formatter:off
 		http
-			.securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
+			.securityMatcher(authorizationServerConfigurer.getEndpointsMatcher()) // 匹配授权服务器的端点,限制此过滤器链仅处理授权服务器端点
 			.with(authorizationServerConfigurer, (authorizationServer) ->
 				authorizationServer
 					.deviceAuthorizationEndpoint(deviceAuthorizationEndpoint ->
-						deviceAuthorizationEndpoint.verificationUri("/activate")
+						deviceAuthorizationEndpoint.verificationUri("/activate") // 设置设备验证端点
 					)
 					.deviceVerificationEndpoint(deviceVerificationEndpoint ->
-						deviceVerificationEndpoint.consentPage(CUSTOM_CONSENT_PAGE_URI)
+						deviceVerificationEndpoint.consentPage(CUSTOM_CONSENT_PAGE_URI) // 设置自定义的同意页面
 					)
 					.clientAuthentication(clientAuthentication ->
 						clientAuthentication
@@ -116,14 +116,15 @@ public class AuthorizationServerConfig {
 							.authenticationProvider(deviceClientAuthenticationProvider)
 					)
 					.authorizationEndpoint(authorizationEndpoint ->
-						authorizationEndpoint.consentPage(CUSTOM_CONSENT_PAGE_URI))
+						authorizationEndpoint.consentPage(CUSTOM_CONSENT_PAGE_URI)) // 设置授权码端点和同意页面
 					.oidc(Customizer.withDefaults())	// Enable OpenID Connect 1.0
 			)
 			.authorizeHttpRequests((authorize) ->
-				authorize.anyRequest().authenticated()
+				authorize.anyRequest().authenticated() // 所有请求需要认证
 			)
 			// Redirect to the /login page when not authenticated from the authorization endpoint
 			// NOTE: DefaultSecurityConfig is configured with formLogin.loginPage("/login")
+			// 当未从授权端点认证时，重定向到/login页面
 			.exceptionHandling((exceptions) -> exceptions
 				.defaultAuthenticationEntryPointFor(
 					new LoginUrlAuthenticationEntryPoint("/login"),

@@ -173,18 +173,22 @@ public final class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilte
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
 			throws ServletException, IOException {
 
+		// 匹配 /oauth2/authorize GET请求
 		if (!this.authorizationEndpointMatcher.matches(request)) {
 			filterChain.doFilter(request, response);
 			return;
 		}
 
 		try {
+			// Converter 转化请求
 			Authentication authentication = this.authenticationConverter.convert(request);
 			if (authentication instanceof AbstractAuthenticationToken authenticationToken) {
 				authenticationToken.setDetails(this.authenticationDetailsSource.buildDetails(request));
 			}
+			// 交给 AuthenticationManager，它内部遍历 Provider 找到能处理的那个
 			Authentication authenticationResult = this.authenticationManager.authenticate(authentication);
 
+			// 检查用户是否已认证
 			if (!authenticationResult.isAuthenticated()) {
 				// If the Principal (Resource Owner) is not authenticated then pass
 				// through the chain
@@ -194,6 +198,7 @@ public final class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilte
 				return;
 			}
 
+			// 判断是否需要跳转同意页面
 			if (authenticationResult instanceof OAuth2AuthorizationConsentAuthenticationToken authorizationConsentAuthenticationToken) {
 				if (this.logger.isTraceEnabled()) {
 					this.logger.trace("Authorization consent is required");
@@ -293,6 +298,19 @@ public final class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilte
 		this.consentPage = consentPage;
 	}
 
+
+	/**
+	 * 发送授权同意页面，引导用户确认是否授权客户端访问其资源
+	 *
+	 * <p>当用户首次授权或需要重新确认授权范围时调用。根据配置决定是重定向到自定义的同意页面 URI，
+	 * 还是使用内置的默认同意页面。</p>
+	 *
+	 * @param request                                HTTP 请求对象
+	 * @param response                               HTTP 响应对象
+	 * @param authorizationCodeRequestAuthentication 原始的授权码请求认证令牌，包含客户端请求的授权范围等参数
+	 * @param authorizationConsentAuthentication     授权同意认证令牌，包含客户端 ID、已认证的主体、授权的范围和状态参数
+	 * @throws IOException 如果在发送重定向或渲染同意页面时发生 I/O 错误
+	 */
 	private void sendAuthorizationConsent(HttpServletRequest request, HttpServletResponse response,
 			OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthentication,
 			OAuth2AuthorizationConsentAuthenticationToken authorizationConsentAuthentication) throws IOException {
@@ -314,6 +332,7 @@ public final class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilte
 		}
 
 		if (hasConsentUri()) {
+			// 有自定义 consent 页面 -> 302 重定向
 			String redirectUri = UriComponentsBuilder.fromUriString(resolveConsentUri(request))
 				.queryParam(OAuth2ParameterNames.SCOPE, String.join(" ", requestedScopes))
 				.queryParam(OAuth2ParameterNames.CLIENT_ID, clientId)
@@ -325,6 +344,7 @@ public final class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilte
 			if (this.logger.isTraceEnabled()) {
 				this.logger.trace("Displaying generated consent screen");
 			}
+			// 没有自定义 consent 页面 ->  框架内置默认页面
 			DefaultConsentPage.displayConsent(request, response, clientId, principal, requestedScopes, authorizedScopes,
 					state, Collections.emptyMap());
 		}

@@ -50,6 +50,8 @@ final class OAuth2AuthorizationCodeGenerator implements OAuth2TokenGenerator<OAu
 		Instant issuedAt = Instant.now();
 		Instant expiresAt = issuedAt
 			.plus(context.getRegisteredClient().getTokenSettings().getAuthorizationCodeTimeToLive());
+		// 1. 生成随机字符串：96 字节 → Base64 URL 编码（无填充）→ 约128字符
+		// 2. 计算过期时间：当前时间 + TokenSettings.authorizationCodeTimeToLive（默认5分钟）
 		return new OAuth2AuthorizationCode(this.authorizationCodeGenerator.generateKey(), issuedAt, expiresAt);
 	}
 

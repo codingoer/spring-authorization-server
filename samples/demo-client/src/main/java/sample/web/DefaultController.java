@@ -15,8 +15,13 @@
  */
 package sample.web;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ResponseBody;
 
 /**
  * @author Joe Grandja
@@ -25,6 +30,8 @@ import org.springframework.web.bind.annotation.GetMapping;
  */
 @Controller
 public class DefaultController {
+
+	private static final Logger LOGGER = LoggerFactory.getLogger(DefaultController.class);
 
 	@GetMapping("/")
 	public String root() {
@@ -39,6 +46,18 @@ public class DefaultController {
 	@GetMapping("/logged-out")
 	public String loggedOut() {
 		return "logged-out";
+	}
+
+	@GetMapping("/debug/id-token")
+	@ResponseBody
+	public String idToken(@AuthenticationPrincipal OidcUser oidcUser) {
+		if (oidcUser == null || oidcUser.getIdToken() == null) {
+			return "No OIDC id_token is available for the current user.";
+		}
+
+		String tokenValue = oidcUser.getIdToken().getTokenValue();
+		LOGGER.info("Current OIDC id_token: {}", tokenValue);
+		return tokenValue;
 	}
 
 }

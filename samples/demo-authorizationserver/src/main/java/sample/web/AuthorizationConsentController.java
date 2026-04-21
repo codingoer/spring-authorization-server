@@ -58,9 +58,12 @@ public class AuthorizationConsentController {
 		// Remove scopes that were already approved
 		Set<String> scopesToApprove = new HashSet<>();
 		Set<String> previouslyApprovedScopes = new HashSet<>();
+		// 1. 查询客户端信息
 		RegisteredClient registeredClient = this.registeredClientRepository.findByClientId(clientId);
+		// 2. 查询用户之前已同意的 scope
 		OAuth2AuthorizationConsent currentAuthorizationConsent =
 				this.authorizationConsentService.findById(registeredClient.getId(), principal.getName());
+		// 3. 将 scope 分为两组
 		Set<String> authorizedScopes;
 		if (currentAuthorizationConsent != null) {
 			authorizedScopes = currentAuthorizationConsent.getScopes();
@@ -78,6 +81,7 @@ public class AuthorizationConsentController {
 			}
 		}
 
+		// 4. 放入模型
 		model.addAttribute("clientId", clientId);
 		model.addAttribute("state", state);
 		model.addAttribute("scopes", withDescription(scopesToApprove));
@@ -90,6 +94,7 @@ public class AuthorizationConsentController {
 			model.addAttribute("requestURI", "/oauth2/authorize");
 		}
 
+		// 5. 渲染页面
 		return "consent";
 	}
 

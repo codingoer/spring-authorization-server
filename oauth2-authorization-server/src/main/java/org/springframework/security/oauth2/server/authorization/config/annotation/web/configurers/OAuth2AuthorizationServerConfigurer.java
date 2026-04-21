@@ -63,6 +63,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * An {@link AbstractHttpConfigurer} for OAuth 2.0 Authorization Server support.
+ * OAuth2.0 认证服务器配置器
  *
  * @author Joe Grandja
  * @author Daniel Garnier-Moiroux

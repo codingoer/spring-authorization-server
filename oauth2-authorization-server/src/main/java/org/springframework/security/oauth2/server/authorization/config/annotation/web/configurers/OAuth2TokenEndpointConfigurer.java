@@ -189,13 +189,15 @@ public final class OAuth2TokenEndpointConfigurer extends AbstractOAuth2Configure
 		String tokenEndpointUri = authorizationServerSettings.isMultipleIssuersAllowed()
 				? OAuth2ConfigurerUtils.withMultipleIssuersPattern(authorizationServerSettings.getTokenEndpoint())
 				: authorizationServerSettings.getTokenEndpoint();
+		// 创建请求匹配器
 		this.requestMatcher = new AntPathRequestMatcher(tokenEndpointUri, HttpMethod.POST.name());
-
+		// 创建默认Providers列表
 		List<AuthenticationProvider> authenticationProviders = createDefaultAuthenticationProviders(httpSecurity);
 		if (!this.authenticationProviders.isEmpty()) {
 			authenticationProviders.addAll(0, this.authenticationProviders);
 		}
 		this.authenticationProvidersConsumer.accept(authenticationProviders);
+		// 将所有Provider注册到HttpSecurity中
 		authenticationProviders.forEach(
 				(authenticationProvider) -> httpSecurity.authenticationProvider(postProcess(authenticationProvider)));
 	}
@@ -209,8 +211,10 @@ public final class OAuth2TokenEndpointConfigurer extends AbstractOAuth2Configure
 		String tokenEndpointUri = authorizationServerSettings.isMultipleIssuersAllowed()
 				? OAuth2ConfigurerUtils.withMultipleIssuersPattern(authorizationServerSettings.getTokenEndpoint())
 				: authorizationServerSettings.getTokenEndpoint();
+		// 创建OAuth2TokenEndpointFilter - 核心过滤器
 		OAuth2TokenEndpointFilter tokenEndpointFilter = new OAuth2TokenEndpointFilter(authenticationManager,
 				tokenEndpointUri);
+		// 创建默认的AuthenticationConverter列表
 		List<AuthenticationConverter> authenticationConverters = createDefaultAuthenticationConverters();
 		if (!this.accessTokenRequestConverters.isEmpty()) {
 			authenticationConverters.addAll(0, this.accessTokenRequestConverters);
