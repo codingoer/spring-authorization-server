@@ -19,60 +19,66 @@
 - [获取用户唯一标识](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-related-id)
 - [获取用户公开信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-account-open-info)
 - [抖音授权码](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/douyin-get-permission-code)
+- [抖音静默获取授权码](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/douyin-default-get-permission-code)
 
 ### Scope 调研
 
 #### 是否区分静默授权和非静默授权
 
-不主打“静默授权”。官方更强调“场景相关、用户感知、按需申请”，明确不建议在应用启动时无理由强拉授权。实际形态上是扫码授权、端内原生授权、H5 授权页，属于显式授权体系。
+区分。除扫码、端内授权页、H5 常规授权页等**显式授权**外，平台还提供**静默授权**能力：在开放平台为应用开通 `login_id` 权限后，可在限定场景（常见为**抖音端内可打开的 H5**）通过**静默授权码**接口，使用 `scope=login_id` 获取 `code` 并换 `open_id` 等标识，**不经用户在当前步骤再次确认**（与“网页/扫码走授权页、必选 `user_info` + `optionalScope`”的链路不同）。
+
+官方整体仍强调场景合规、按需申请，不建议无故强拉授权；但**不能**概括成“没有静默授权”，`login_id` 即对应静默链路。
 
 #### Scope 示例与命名方式
 
-- 必选 scope：`scope=user_info`
-- 可选 scope：`optionalScope=friend_relation,1,message,0`
+- 静默授权（静默授权码）：`scope=login_id`（须已申请 `login_id` 权限；见静默获取授权码文档中的域名与端内限制）
+- 显式授权（常规授权码）：必选 `scope=user_info`（及按需的可选 scope）
+- 可选 scope（显式授权页）：`optionalScope=friend_relation,1,message,0`
 - 命名风格：小写英文 + 下划线，多个 scope 用英文逗号分隔
 
 #### Scope 划分与完整清单
 
-在题目给定文档和授权码页面中，能明确确认的 scope 有：
+在题目给定文档、常规/静默授权码页面中，能明确确认的 scope 有：
 
+- `login_id`：静默授权码能力；用于在限定场景下获取 `code` 并换取用户在当前应用下的标识（如 `open_id`），不等同于读取昵称头像等资料能力
 - `user_info`：获取用户公开信息，如昵称、头像
 - `friend_relation`：粉丝/关系判断能力
 - `message`：私信能力
 
-其划分方式是“基础身份 + 扩展能力”。不是极细粒度资源级拆分，而是按平台能力模块拆分。
+其划分方式是“静默身份票据 + 基础公开资料 + 扩展能力”。不是极细粒度资源级拆分，而是按平台能力模块拆分；静默层仅解决**端内无打扰换标识**，资料与其他能力仍走显式授权或接口能力。
 
 #### 硬性要求与授权策略
 
-- 需要先在开放平台申请对应 scope 使用权限
-- 必选 scope 放在 `scope` 参数中，多个用英文逗号分隔
-- 可选 scope 放在 `optionalScope` 中，并附带默认勾选位：`1` 为勾选，`0` 为不勾选
+- 需要先在开放平台申请对应 scope 使用权限（含 `login_id`、静默链路所需的域名与端内打开等约束，以静默获取授权码文档为准）
+- **显式授权**：必选 scope 放在 `scope` 参数中，多个用英文逗号分隔；可选 scope 放在 `optionalScope` 中，并附带默认勾选位：`1` 为勾选，`0` 为不勾选
 - `redirect_uri` 必须是 `https`，且必须与应用配置的回调地址匹配
 - `redirect_uri` 不支持自定义 query 参数
-- 用户授权后，客户端才能用 `access_token` 调用对应接口
+- **静默授权**：走专用静默授权码 URL 与参数约定；换得的 `access_token` 仅承载已开通且与本次 `scope` 匹配的权限边界，并不等于自动获得 `user_info` 等资料类能力
 
 #### 真实业务场景
 
-- 登录后只拿身份和公开资料：申请 `user_info`
+- 端内场景先稳定拿到 `open_id`、做账号绑定或免打扰登录态：在合规前提下使用 `login_id` 静默授权码
+- 登录后需要昵称、头像等公开资料：再走 `user_info` 等显式授权（或相应接口能力）
 - 内容/私域运营：在已登录基础上追加 `friend_relation`
 - 客服、通知、私信触达：追加 `message`
 
 #### 设计规则、实际用法、优缺点
 
-抖音的设计重点不是把 scope 做得很多，而是把“必选”和“可选”分开，先让登录链路保持最小授权，再按业务需要追加能力。
+抖音的设计重点除了 `user_info` 与 `optionalScope` 的“必选/可选”分层外，还有 **静默（`login_id`）与显式授权页** 的分工：端内可先低打扰拿标识，需要资料或扩展能力再走授权页。
 
-- 优点：支持渐进式授权，减少首次授权阻力
+- 优点：`login_id` 支持端内静默换标识，减少不必要弹窗
+- 优点：显式链路仍支持渐进式授权（必选 + 可选 scope）
 - 优点：强场景约束，比较符合最小权限原则
 - 缺点：官方 scope 文档较分散，完整枚举不集中
 - 缺点：对回调地址和接入姿势限制较严格
 
 #### 粒度原则与平台特点
 
-整体偏中粒度。`user_info` 属于较粗粒度，`friend_relation`、`message` 则按能力模块细分。平台特点是“先基础登录，再按能力扩权”，并且通过 `optionalScope` 让授权页更贴近真实业务场景。
+整体偏中粒度。`login_id` 是**静默层**标识能力；`user_info` 属于较粗的资料粒度；`friend_relation`、`message` 则按能力模块细分。平台特点是“端内可先静默标识，再按资料与业务能力扩权”，显式链路通过 `optionalScope` 贴近业务场景。
 
 #### 一句话总结
 
-抖音的 scope 体系是“基础登录 + 能力扩权”，重点在按场景渐进授权，而不是做超细的资源级 scope。
+抖音同时具备 **静默标识（`login_id`）** 与 **显式授权页（`user_info` + 可选能力）**：前者侧重端内无打扰换 `open_id` 等，后者按场景渐进拿资料与扩展能力，而不是单一“只有弹窗授权”模型。
 
 ## 快手
 
@@ -512,5 +518,17 @@
 #### 一句话总结
 
 小红书的 scope 最接近企业广告平台权限模型，把报表、查询、投放、账户管理拆成了可独立授权的细粒度能力。
+
+
+## QQ
+
+### 官方链接
+
+- [QQ互联首页](https://connect.qq.com/)
+- [QQ互联应用管理](https://connect.qq.com/manage.html#/)
+- [腾讯应用开放平台](https://app.open.qq.com/p/developer/team_manage/info)
+- [腾讯应用开放平台网站接入](https://wikinew.open.qq.com/index.html#/iwiki/877911779)
+
+### Scope调研
 
 

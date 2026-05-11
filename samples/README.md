@@ -1,6 +1,31 @@
 # Samples Overview
 
-本文件是 `samples` 目录的快速导航，说明每个 demo 的用途、端口和配对关系。
+本文件是 `samples` 目录的快速导航，说明每个 demo 的用途、端口和配对关系，也汇总了本目录下的分析文档，方便按主题阅读。
+
+## 文档导航
+
+下面这些 Markdown 主要是对 sample、授权流程、scope 设计和网关校验方案的补充分析。建议先看“总览类”文档，再按具体主题深入。
+
+| 文档 | 作用说明 |
+|---|---|
+| [`samples-flow-analysis.md`](./samples-flow-analysis.md) | 从浏览器跳转、登录页、consent、回调到换 token，完整拆解一次 OIDC 授权码登录流程。适合先建立整体流程认知。 |
+| [`samples-code-analysis.md`](./samples-code-analysis.md) | 把授权流程映射到 Spring Security / Spring Authorization Server 的关键过滤器、Provider 和 sample 源码上。适合对照代码阅读。 |
+| [`samples-scenario-api-list.md`](./samples-scenario-api-list.md) | 按“已登录/未登录、已授权/未授权”四种组合，列出每种场景下会出现的 API 请求链路与关键组件。适合排查不同分支行为。 |
+| [`oauth2-client-login-state-analysis.md`](./oauth2-client-login-state-analysis.md) | 重点解释 OAuth2 Client 的登录态、`JSESSIONID`、`SecurityContext`、`id_token`、`refresh_token` 之间的关系。适合理清会话与 token 生命周期。 |
+| [`oidc-web-flow-diagrams.md`](./oidc-web-flow-diagrams.md) | 用图解方式说明 Web 客户端下的 OIDC 授权码流程、Session 分布、刷新与登出过程。适合快速看图理解。 |
+| [`oidc-app-flow-diagrams.md`](./oidc-app-flow-diagrams.md) | 对比原生 App 与 Web 的差异，说明 App 侧 OIDC + PKCE、token 存储、刷新、重新登录与登出流程。 |
+| [`scope-plan.md`](./scope-plan.md) | 结合主题乐园业务、TYK 网关、API Market 和授权服务，给出一套完整的 scope 命名、分层、审批、映射与落地方案。 |
+| [`scope-research.md`](./scope-research.md) | 调研微信、支付宝、京东、抖音等平台的 scope 设计方式，便于横向比较不同平台的授权模型。 |
+| [`api-market-gateway-scope-diagrams.md`](./api-market-gateway-scope-diagrams.md) | 聚焦 API Market + 网关集中校验 scope 的架构设计，说明 API 与 scope 的映射、网关校验链路和扩展思路。 |
+| [`spa-client/README.md`](./spa-client/README.md) | `spa-client` 前端工程自己的启动说明，主要包含 Angular 开发、构建和测试命令。 |
+
+## 阅读建议
+
+- 想先了解 sample 整体运行关系：先看本文，再看 [`samples-flow-analysis.md`](./samples-flow-analysis.md)
+- 想追源码：看 [`samples-code-analysis.md`](./samples-code-analysis.md)
+- 想搞清楚 Session / Token / 登录态：看 [`oauth2-client-login-state-analysis.md`](./oauth2-client-login-state-analysis.md)
+- 想设计 scope 体系或网关校验：看 [`scope-plan.md`](./scope-plan.md) 和 [`api-market-gateway-scope-diagrams.md`](./api-market-gateway-scope-diagrams.md)
+- 想做平台调研对比：看 [`scope-research.md`](./scope-research.md)
 
 ## 每个 Demo 的作用与端口
 
