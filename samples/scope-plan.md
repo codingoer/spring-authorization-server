@@ -16,6 +16,29 @@
 1. **静默授权是 TOC 平台刚需**：微信和支付宝的模式证明了"先静默识别、再显式授权"是最优实践
 2. **读写分离适合业务 API**：京东的 `业务域.操作类型` 模式命名可预测、权限控制精确
 3. **Consent 三状态优化体验**：抖音的"必选/默认勾选/默认不选"让授权页更贴近业务场景
+4. Scope最小化 + 分层授权 + 动态申请 + 人工审核
+5. 应用默认仅获得基础scope，高级scope必须单独申请
+6. 所有权限申请，变更，授权记录全链路日志保存
+7. 区分【自动通过】【人工审核】，适配不同安全等级
+8. **双轨 Scope**：用户相关（用户委托）与非用户相关（应用身份）**拆分命名与审批链路**，网关按 API 的「委托类型」与 scope 同时校验，避免混用 token
+
+---
+
+## 双轨模型概述（用户相关 API vs 非用户相关 API）
+
+本方案将可调用的开放能力分为两条**互不替代**的轨道；二者可复用同一套微服务与领域模型，但 **Scope 字符串、OAuth Grant、审批对象、路由前缀**不同。
+
+| 轨道 | 面向对象 | OAuth Grant | 是否需要用户 Consent | Scope 命名空间 | 典型 token `sub` | 典型 API 路由前缀（示例） |
+|------|----------|-------------|----------------------|----------------|-------------------|---------------------------|
+| **用户相关（USER）** | 第三方应用**代表登录用户**调用乐园「用户上下文」能力 | `authorization_code`（建议 PKCE） | 需要（静默仅限 `openid`） | 身份：`openid` 等；业务：**`{业务域}.{read\|write}`** | 用户标识 | `/api/b2c/**` |
+| **非用户相关（APP）** | 合作方系统、闸机、内部作业等**不绑定当前 C 端用户**的调用 | `client_credentials` | 不需要（平台对客户端准入与授权） | **无身份 scope**；业务：**`partner.{业务域}.{read\|write}`** | 客户端标识（或平台约定的服务主体） | `/api/partner/**` |
+
+**设计要点**：
+
+1. **禁止混用字符串**：`ticket.read` **仅**出现在用户委托访问令牌中；合作方读门票使用 **`partner.ticket.read`**。网关与 SAS 在签发/校验时不会因「同名不同义」产生歧义。
+2. **客户端形态**：推荐为同一合作伙伴拆分 **「用户端应用」（小程序/H5，走 USER）** 与 **「服务端应用」（合作方后台/闸机，走 APP）** 两个 Registered Client；若必须合一，则 `registered_client.scopes` 内**同时包含**两类前缀的 scope，但 **token 换取请求仍按 grant 限制**（`client_credentials` 不得请求 `openid` / `ticket.*` 等 USER 业务 scope）。
+3. **申请与审批**：USER 轨道需兼顾**个人信息保护与用户同意**；APP 轨道以**合同范围、系统归属、风控**为主；二者可在控制台共用「能力目录」，但 **`client_scope.delegation`（或等价字段）必须标 USER / APP**，审批模板可不同。
+4. **资源服务**：除 scope 与路由外，USER 访问必须以 **`sub`（用户）**做数据范围隔离；PARTNER 访问以 **client_id / 租户 / 合同授权边界**做隔离——**不得以 scope 同名代替数据鉴权**。
 
 ---
 
@@ -29,9 +52,9 @@
 <身份域>
 ```
 
-无点分、无操作后缀。身份 scope 是特殊的存在，不遵循业务域规则。
+无点分、无操作后缀。身份 scope 是特殊的存在，不遵循业务域规则；**仅属于用户相关轨道**，禁止出现在 `client_credentials` 请求中。
 
-**业务 API Scope**（借鉴京东 `业务域.操作类型`）：
+**用户委托类业务 Scope（用户相关 API）**（借鉴京东 `业务域.操作类型`）：
 
 ```
 <业务域>.<操作类型>
@@ -41,15 +64,25 @@
 - **操作类型**：`read`（读取）或 `write`（写入/创建/删除/核销）
 - **分隔符**：点号 `.`
 
+**应用身份类业务 Scope（非用户相关 API）**：
+
+```
+partner.<业务域>.<操作类型>
+```
+
+- 固定前缀 **`partner.`** 表示「应用身份 / 合作方系统」轨道，与 C 端用户委托区分
+- **`业务域`、操作类型**与用户委托类保持一致，便于审批目录与文档对照（例如用户侧 `order.read` ↔ 合作方 `partner.order.read`）
+
 ### 命名规则
 
 | 规则 | 说明 | 示例 |
 |------|------|------|
 | 身份 scope 特殊命名 | 不遵循业务域规则，单独定义 | `openid`、`profile`、`phone` |
-| 业务域对应微服务 | 一个微服务对应一个业务域 | `ticket-service` → `ticket.*` |
-| 多词业务域用连字符 | 保持可读性 | `annual-card.read` |
-| 读写严格分离 | 读取用 `.read`，写入/创建/删除用 `.write` | `order.read` / `order.write` |
-| 只读资源无 write | 如果业务域只有查询接口 | `park.read`（游园信息只读） |
+| USER / APP 命名分轨 | 用户委托业务不用前缀；应用身份业务固定 `partner.` 前缀 | `ticket.read` / `partner.ticket.read` |
+| 业务域对应微服务 | 一个微服务对应一个业务域 | `ticket-service` → `ticket.*` 与 `partner.ticket.*` |
+| 多词业务域用连字符 | 保持可读性 | `annual-card.read`、`partner.annual-card.read` |
+| 读写严格分离 | 读取用 `.read`，写入/创建/删除用 `.write` | `order.read` / `partner.order.write` |
+| 只读资源无 write | 如果业务域只有查询接口 | `park.read`、`partner.park.read` |
 | 禁止超细粒度 | 不拆到字段级别 | ✅ `ticket.read` ❌ `ticket.price.read` |
 | 禁止超粗粒度 | 不使用 `all`、`*` 等通配 scope | ❌ `api.all` ❌ `*` |
 
@@ -60,8 +93,8 @@
 ─────────────────────────────         ─────────────────────────────
 snsapi_base            (微信风格)      openid
 auth_user              (支付宝风格)     profile
-user_info              (太粗)          profile + user.read
-ticket                 (无操作)        ticket.read / ticket.write
+user_info              (太粗)          profile + 业务 USER scope
+ticket                 (无操作)        ticket.read / partner.ticket.read
 annualcard_read        (无分隔)        annual-card.read
 ticket.price.read      (太细)          ticket.read
 api.all                (太危险)        按业务域逐个分配
@@ -71,7 +104,7 @@ api.all                (太危险)        按业务域逐个分配
 
 ## Scope 完整清单
 
-### 1. 用户身份 Scope（authorization_code 专用）
+### 1. 用户身份 Scope（仅用户相关轨道 / authorization_code）
 
 | Scope | 说明 | 是否静默 | 映射 API | 对标平台 |
 |-------|------|----------|----------|----------|
@@ -90,7 +123,7 @@ flowchart TD
     B -->|"包含 profile/phone/email<br/>或业务 scope"| D["🟡 非静默授权<br/>弹出 Consent 页<br/>用户确认后返回 code"]
 
     C --> E["token scope: openid"]
-    D --> F["token scope: openid profile ticket.read ..."]
+    D --> F["token scope: openid profile ticket.read ...（用户委托类业务 scope）"]
 
     style C fill:#4CAF50,color:#fff
     style D fill:#FF9800,color:#fff
@@ -105,98 +138,124 @@ flowchart TD
 
 > **关键规则**：`openid` 是静默 scope，请求中**只有** `openid` 时不弹 Consent 页，直接返回授权码。只要包含任何非静默 scope，就必须弹 Consent 页。`openid` 在所有 authorization_code 流程中**自动包含**，无需显式请求。
 
-### 2. 业务 API Scope（两种授权模式通用）
+### 2. 用户委托类业务 Scope（用户相关 API / 仅 authorization_code）
+
+> **仅用于** `authorization_code` 换取的访问令牌；**必须通过 Consent**（静默场景除外），且资源访问以 **用户 `sub`** 为数据边界。路由建议使用 B2C 前缀（示例：`/api/b2c/**`）。
 
 #### 2.1 门票业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `ticket.read` | 查询门票信息、门票列表 | `GET /tickets/**` | OTA平台查门票 |
-| `ticket.write` | 购买/退票/修改门票 | `POST /tickets`, `PUT /tickets/**`, `DELETE /tickets/**` | OTA平台代购票 |
+| `ticket.read` | 查询门票信息、门票列表（面向当前登录用户/会话场景） | `GET /api/b2c/tickets/**` | OTA / 小程序展示购票 |
+| `ticket.write` | 购买/退票/修改门票（用户发起） | `POST /api/b2c/tickets`, `PUT /api/b2c/tickets/**` | OTA 代用户下单 |
 
 #### 2.2 年卡业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `annual-card.read` | 查询年卡信息、年卡权益 | `GET /annual-cards/**` | 会员平台查年卡 |
-| `annual-card.write` | 购买/续费/激活年卡 | `POST /annual-cards`, `PUT /annual-cards/**` | 会员平台代办年卡 |
+| `annual-card.read` | 查询年卡信息、年卡权益 | `GET /api/b2c/annual-cards/**` | 会员中心 |
+| `annual-card.write` | 购买/续费/激活年卡 | `POST /api/b2c/annual-cards`, `PUT /api/b2c/annual-cards/**` | 代办年卡 |
 
 #### 2.3 订单业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `order.read` | 查询订单信息、订单列表 | `GET /orders/**` | 订单追踪、财务对账 |
-| `order.write` | 创建/取消/修改订单 | `POST /orders`, `PUT /orders/**` | 代下单、退款处理 |
+| `order.read` | 查询**当前用户**订单与状态 | `GET /api/b2c/orders/**` | 用户订单列表、追踪 |
+| `order.write` | 创建/取消**与用户关联**的订单 | `POST /api/b2c/orders`, `PUT /api/b2c/orders/**` | 代下单、退款发起 |
 
 #### 2.4 预约业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `reservation.read` | 查询预约信息 | `GET /reservations/**` | 预约查询 |
-| `reservation.write` | 创建/取消/修改预约 | `POST /reservations`, `PUT /reservations/**` | 代预约、预约管理 |
+| `reservation.read` | 查询当前用户预约 | `GET /api/b2c/reservations/**` | 预约查询 |
+| `reservation.write` | 创建/取消预约 | `POST /api/b2c/reservations`, `PUT /api/b2c/reservations/**` | 代预约 |
 
-#### 2.5 核销业务域
+#### 2.5 核销业务域（用户场景）
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `verification.read` | 查询核销记录 | `GET /verifications/**` | 核销记录查询 |
-| `verification.write` | 执行核销操作 | `POST /verifications/verify` | 闸机核销、人工核销 |
+| `verification.read` | 用户侧核销记录/凭证查询 | `GET /api/b2c/verifications/**` | 用户自查 |
+| `verification.write` | 用户触发的核销相关写操作（若业务需开放） | `POST /api/b2c/verifications/**` | 限定场景 |
+
+> **说明**：闸机、园方后台批量核销等 **无用户在场** 的高危能力应放在 **应用身份轨道**（`partner.verification.*` + `/api/partner/**`），勿与 C 端用户 scope 混用。
 
 #### 2.6 会员业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `member.read` | 查询会员信息、积分、等级 | `GET /members/**` | 会员画像、积分查询 |
-| `member.write` | 修改会员信息、积分操作 | `PUT /members/**`, `POST /members/points/**` | 积分兑换、等级变更 |
+| `member.read` | 查询当前用户会员、积分、等级 | `GET /api/b2c/members/**` | 个人中心 |
+| `member.write` | 变更当前用户会员资料、积分（经业务规则） | `PUT /api/b2c/members/**`, `POST /api/b2c/members/points/**` | 积分兑换 |
 
 #### 2.7 游园业务域（只读）
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `park.read` | 查询游园信息、设施状态、排队时间 | `GET /park/**` | 导览小程序、园区信息展示 |
+| `park.read` | 个性化游园信息、推荐（若需登录态） | `GET /api/b2c/park/**` | 导览小程序 |
 
-> 游园信息属于公共信息，只提供 `.read`，无 `.write`。
+> 纯公开静态信息若完全匿名，也可不走 token；一旦纳入开放平台收费或控量，建议仍通过 **APP 轨道的 `partner.park.read`** 发 token。
 
 #### 2.8 支付业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `payment.read` | 查询支付记录 | `GET /payments/**` | 财务对账 |
-| `payment.write` | 发起支付、退款 | `POST /payments/charge`, `POST /payments/refund` | 支付网关 |
+| `payment.read` | 查询当前用户支付记录 | `GET /api/b2c/payments/**` | 用户账单 |
+| `payment.write` | 发起支付、退款（用户上下文） | `POST /api/b2c/payments/charge`, `POST /api/b2c/payments/refund` | 收银台 |
 
 #### 2.9 通知业务域
 
 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
 |-------|------|---------------|-----------|
-| `notification.read` | 读取通知消息 | `GET /notifications/**` | 通知聚合 |
-| `notification.write` | 发送通知、标记已读 | `POST /notifications/**` | 消息推送 |
+| `notification.read` | 读取当前用户通知 | `GET /api/b2c/notifications/**` | 消息中心 |
+| `notification.write` | 通知状态回写等 | `POST /api/b2c/notifications/**` | 端上回调 |
 
-### 3. Scope 全景一览
+### 3. 应用身份类业务 Scope（非用户相关 API / 仅 client_credentials）
+
+> **仅用于** `client_credentials` 换取的访问令牌；**无** `openid`/`profile` 等身份 scope；不经过用户 Consent。路由建议使用合作方前缀（示例：`/api/partner/**`），资源访问以 **client_id、租户、合同授权** 为边界，而非终端用户 `sub`。
+
+下列与上一节 **逐域对称**，前缀固定为 `partner.`，避免与用户委托 scope 同名。
+
+#### 3.1—3.9 对称清单（合作方 / 系统）
+
+| 业务域 | Scope | 说明 | 映射 API 示例 | 典型使用者 |
+|--------|-------|------|---------------|-----------|
+| 门票 | `partner.ticket.read` | 合作方查询可售库存、价格体系等 | `GET /api/partner/tickets/**` | OTA 供应链、查价 |
+| 门票 | `partner.ticket.write` | 合作方批量上下架、锁票等（按合同） | `POST /api/partner/tickets/**` | 渠道运营系统 |
+| 年卡 | `partner.annual-card.read` | 合作方查询年卡SKU、权益规则 | `GET /api/partner/annual-cards/**` | 会员渠道 |
+| 年卡 | `partner.annual-card.write` | 合作方受理年卡业务（按合同） | `POST /api/partner/annual-cards/**` | B2B 受理 |
+| 订单 | `partner.order.read` | 合作方按授权范围查询订单/对账 | `GET /api/partner/orders/**` | 财务对账、履约 |
+| 订单 | `partner.order.write` | 合作方下单、退货（系统间） | `POST /api/partner/orders/**` | B2B 下单对接 |
+| 预约 | `partner.reservation.read` / `partner.reservation.write` | 渠道侧预约查询与写入 | `GET/POST /api/partner/reservations/**` | 渠道中心 |
+| 核销 | `partner.verification.read` | 核销审计、记录拉取 | `GET /api/partner/verifications/**` | 风控、对账 |
+| 核销 | `partner.verification.write` | **闸机/线下设备核销**、补核销等 | `POST /api/partner/verifications/verify` | 闸机、园方作业 |
+| 会员 | `partner.member.read` / `partner.member.write` | 合作方会员批量画像、积分运营（合同内） | `GET/POST /api/partner/members/**` | CRM、联合运营 |
+| 游园 | `partner.park.read` | 导览数据、排队等对外公开数据（控量计费） | `GET /api/partner/park/**` | 大屏、三方导览 |
+| 支付 | `partner.payment.read` / `partner.payment.write` | 商户对账、退款、分账（按支付合规） | `GET/POST /api/partner/payments/**` | 财务、支付机构 |
+| 通知 | `partner.notification.read` / `partner.notification.write` | 系统向合作方投递或拉取通知 | `/api/partner/notifications/**` | 消息中台 |
+
+### 4. Scope 全景一览
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    用户身份 Scope (IDENTITY)                   │
-│  ┌────────┐  ┌─────────┐  ┌───────┐  ┌───────┐              │
-│  │ openid │  │ profile │  │ phone │  │ email │              │
-│  │ (静默) │  │(非静默) │  │(非静默)│  │(非静默)│              │
-│  └────────┘  └─────────┘  └───────┘  └───────┘              │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│     用户相关轨道（USER / authorization_code）                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  身份 Scope (IDENTITY)                                                   │
+│  openid（静默） profile phone email                                     │
+│                                                                          │
+│  用户委托类业务 (B2C 示例前缀 /api/b2c/)                                   │
+│  ticket.* annual-card.* order.* reservation.* verification.*            │
+│  member.* park.* payment.* notification.*                                │
+└─────────────────────────────────────────────────────────────────────────┘
 
-┌──────────────────────────────────────────────────────────────┐
-│                    业务 API Scope (BUSINESS)                   │
-│                                                               │
-│  门票域         年卡域           订单域          预约域         │
-│  ticket.read    annual-card.read   order.read    reservation.read
-│  ticket.write   annual-card.write  order.write   reservation.write
-│                                                               │
-│  核销域           会员域         游园域          支付域         │
-│  verification.read  member.read    park.read     payment.read
-│  verification.write member.write                 payment.write
-│                                                               │
-│  通知域                                                       │
-│  notification.read                                            │
-│  notification.write                                           │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│     非用户相关轨道（APP / client_credentials）                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│  无身份 scope                                                            │
+│                                                                          │
+│  应用身份类业务 partner.*（Partner 示例前缀 /api/partner/）                  │
+│  partner.ticket.* partner.annual-card.* partner.order.*                  │
+│  partner.reservation.* partner.verification.* partner.member.*           │
+│  partner.park.* partner.payment.* partner.notification.*                 │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -205,47 +264,51 @@ flowchart TD
 
 ```mermaid
 flowchart TB
-    subgraph L0["⚪ 第零层：隐式 Scope（无需申请）"]
-        L0A["openid — 静默获取，authorization_code 流程自动包含"]
+    subgraph U0["⚪ USER·第零层：隐式 Scope"]
+        U0A["openid — authorization_code 自动包含，可静默"]
     end
 
-    subgraph L1["🟢 第一层：用户身份 Scope（申请即得）"]
-        L1A["profile — 用户基本信息"]
-        L1B["phone — 用户手机号"]
-        L1C["email — 用户邮箱"]
+    subgraph U1["🟢 USER·第一层：身份 Scope"]
+        U1A["profile / phone / email — 非静默，Consent"]
     end
 
-    subgraph L2["🟡 第二层：业务读取 Scope（申请+快速审批）"]
-        L2A["ticket.read / annual-card.read"]
-        L2B["order.read / reservation.read"]
-        L2C["member.read / park.read"]
-        L2D["verification.read / payment.read"]
-        L2E["notification.read"]
+    subgraph U2["🟡 USER·第二层：用户委托 · 读取"]
+        U2A["ticket.read、order.read、member.read …"]
     end
 
-    subgraph L3["🔴 第三层：业务写入 Scope（申请+人工审核）"]
-        L3A["ticket.write / annual-card.write"]
-        L3B["order.write / reservation.write"]
-        L3C["member.write / payment.write"]
-        L3D["verification.write / notification.write"]
+    subgraph U3["🔴 USER·第三层：用户委托 · 写入"]
+        U3A["ticket.write、order.write、member.write …"]
     end
 
-    L0 --> L1
-    L1 --> L2
-    L2 --> L3
+    subgraph A2["🟡 APP·第二层：应用身份 · 读取（Partner）"]
+        A2A["partner.ticket.read、partner.order.read …"]
+    end
 
-    style L0 fill:#9E9E9E,color:#fff
-    style L1 fill:#4CAF50,color:#fff
-    style L2 fill:#FF9800,color:#fff
-    style L3 fill:#F44336,color:#fff
+    subgraph A3["🔴 APP·第三层：应用身份 · 写入（Partner）"]
+        A3A["partner.ticket.write、partner.verification.write …"]
+    end
+
+    U0 --> U1 --> U2 --> U3
+    A2 --> A3
+
+    style U0 fill:#9E9E9E,color:#fff
+    style U1 fill:#4CAF50,color:#fff
+    style U2 fill:#FF9800,color:#fff
+    style U3 fill:#F44336,color:#fff
+    style A2 fill:#FFB74D,color:#fff
+    style A3 fill:#E57373,color:#fff
 ```
 
-| 层级 | 审批要求 | 是否静默 | 主题乐园典型场景 |
-|------|----------|----------|----------------|
-| ⚪ 隐式 Scope | 无需申请，自动包含 | ✅ 静默 | 闸机扫码识别用户、小程序自动登录 |
-| 🟢 身份 Scope | 提交申请，自动审批 | ❌ 非静默 | 获取昵称头像展示欢迎页、获取手机号绑定会员 |
-| 🟡 读取 Scope | 提交申请，自动或快速审批 | ❌ 非静默 | OTA查门票价格、合作伙伴查订单状态 |
-| 🔴 写入 Scope | 提交申请，必须人工审核 | ❌ 非静默 | OTA代售票、闸机核销、发起退款 |
+| 层级 | 轨道 | 审批要求 | 是否静默 | 典型场景 |
+|------|------|----------|----------|----------|
+| ⚪ 隐式 | USER | 无需申请，自动包含（授权码客户端） | ✅ 仅 `openid` | 小程序静默识别 |
+| 🟢 身份 | USER | 申请，多自动审批 | ❌ Consent | 拉取昵称、手机号 |
+| 🟡 读取 | USER | READ 层规则 | ❌ Consent | 用户查本人订单/门票 |
+| 🔴 写入 | USER | WRITE 多人工审核 | ❌ Consent | 用户发起购票、退款 |
+| 🟡 读取 | APP | 合同 + 快速审批 | N/A（无 Consent） | 渠道查价、对账拉单 |
+| 🔴 写入 | APP | 人工高优 | N/A | 闸机核销、渠道锁票 |
+
+> **说明**：APP 轨道不存在「静默授权」概念；其风险控制前移为 **client 审核、IP 白名单、额度、密钥轮换** 等。
 
 ---
 
@@ -271,28 +334,29 @@ flowchart TB
         direction TB
         CC1["🏢 服务器直接请求 token"]
         CC2["授权服务器验证 client_id<br/>检查该客户端被分配的 scope"]
-        CC3["颁发 token<br/>scope = 管理员分配的业务 scope"]
+        CC3["颁发 token<br/>scope = 管理员分配的应用身份 scope（partner.*）"]
         CC1 --> CC2 --> CC3
     end
 ```
 
-| 维度 | authorization_code | client_credentials |
+| 维度 | authorization_code（USER） | client_credentials（APP） |
 |------|-------------------|-------------------|
-| **适用场景** | 第三方应用代表用户操作（OTA代售票、小程序登录） | 服务器间 API 调用（内部服务互通） |
-| **可用的身份 scope** | ✅ `openid`、`profile`、`phone`、`email` | ❌ 不适用（无用户） |
-| **可用的业务 scope** | ✅ 用户 consent 确认的业务 scope | ✅ 管理员分配的业务 scope |
-| **是否弹 Consent 页** | 取决于 scope 是否包含非静默 scope | 不需要 |
-| **token 中的 sub** | 用户 ID | 客户端 ID |
+| **适用场景** | 第三方代表**登录用户**（小程序、H5 购票） | 合作方系统、闸机、对账，**无当前用户在场** |
+| **身份 scope** | ✅ `openid`、`profile`、`phone`、`email` | ❌ **禁止**出现在 token 请求中 |
+| **业务 scope** | ✅ `ticket.read` 等 **不含 `partner.` 前缀** | ✅ **仅** `partner.*` |
+| **是否弹 Consent 页** | 视是否仅 `openid` 而定 | 不需要 |
+| **token `sub`** | 用户标识 | 客户端/服务主体标识（由授权服务器约定） |
+| **典型路由** | `/api/b2c/**` | `/api/partner/**` |
 
 ### 主题乐园典型场景
 
 | 场景 | 授权模式 | Scope | 说明 |
 |------|----------|-------|------|
-| 小程序静默登录 | authorization_code | `openid` | 用户进入小程序自动识别身份 |
-| OTA 代售门票 | authorization_code | `openid profile ticket.read ticket.write` | 用户授权 OTA 查询和购买门票 |
-| 合作伙伴查询订单 | client_credentials | `order.read` | 服务器间查询订单状态 |
-| 闸机核销系统 | client_credentials | `verification.read verification.write` | 闸机服务核销门票 |
-| 会员积分兑换 | authorization_code | `openid member.read member.write` | 用户授权积分操作 |
+| 小程序静默登录 | authorization_code | `openid` | 静默识别用户 |
+| OTA 代用户购票 | authorization_code | `openid profile ticket.read ticket.write` | 用户 Consent 后代下单 |
+| 合作方系统对账/拉单 | client_credentials | `partner.order.read` | 无用户 Consent，合同 + client 审核 |
+| 闸机核销系统 | client_credentials | `partner.verification.read` `partner.verification.write` | 设备与服务账号，高危写入强审批 |
+| 会员积分（个人中心） | authorization_code | `openid member.read member.write` | 用户本人积分 |
 
 ---
 
@@ -335,11 +399,12 @@ flowchart TB
 
     subgraph GW["🚪 TYK 网关"]
         GW1["1. 验证 JWT 签名/有效期"]
+        GW1b["1b. 校验 grant / 委托类型与路由一致"]
         GW2["2. 提取 token 中的 scope"]
-        GW3["3. 查 API Market：该 API 需要什么 scope"]
-        GW4["4. 比对 scope"]
+        GW3["3. 查 API Market：该 API 所属轨道、所需 scope"]
+        GW4["4. 比对 scope + 轨道"]
         GW5["5. 放行 / 拦截"]
-        GW1 --> GW2 --> GW3 --> GW4 --> GW5
+        GW1 --> GW1b --> GW2 --> GW3 --> GW4 --> GW5
     end
 
     subgraph API_Market["📊 API Market 平台"]
@@ -373,45 +438,42 @@ flowchart TB
 
 | 组件 | 验证 JWT 签名 | 验证 scope | 维护 scope 规则 | 说明 |
 |------|:---:|:---:|:---:|------|
-| 授权服务器 | ✅ 颁发时 | ✅ **第一道关卡** | ❌ | 管"token 里能写什么 scope"——验证请求的 scope ⊆ registered_client.scopes |
-| TYK 网关 | ✅ | ✅ **第二道关卡** | ❌ | 管"token 里的 scope 能访问什么 API"——验证 token scope ⊇ API 所需 scope |
+| 授权服务器 | ✅ 颁发时 | ✅ **第一道关卡** | ❌ | 管「请求的 scope ⊆ registered_client.scopes」，并在 **`client_credentials`** 时拒绝 USER 轨 scope / 身份 scope |
+| TYK 网关 | ✅ | ✅ **第二道+** | ❌ | 管「token scope ⊇ API 所需 scope」**且**「USER 轨 API 不得使用 `client_credentials` token」等委托规则 |
 | 资源服务器 | ✅ | ❌ | ❌ | 只验签名，scope 校验已由网关完成 |
 | API Market | ❌ | ❌ | ✅ **核心** | 数据源：定义"哪个 API 需要什么 scope" |
 
-### 为什么需要两道 Scope 关卡
+### 为什么需要「两道 scope + 委托轨道」关卡
 
-系统中存在**两道独立的 scope 校验**，它们在不同时机、针对不同问题，缺一不可：
+系统中存在**授权服务器上的准入**与**网关上的消费侧校验**，二者针对不同问题；**双轨模型下还需校验「轨道一致」**。
 
-| | 第一道：授权服务器（`registered_client.scopes`） | 第二道：TYK 网关（API Market 映射） |
+| | 第一道：授权服务器（`registered_client.scopes` + grant 约束） | 第二道：TYK 网关（API Market：`scope` + `delegation`） |
 |---|---|---|
-| **校验时机** | 颁发 token **之前** | 使用 token 访问 API **时** |
-| **校验什么** | 客户端**能不能请求**这个 scope | token 里**有没有**这个 scope |
-| **校验逻辑** | `请求的 scope` ⊆ `registered_client.scopes` | `token 的 scope` ⊇ `API 所需 scope` |
-| **失败结果** | 授权流程直接中断，token 都拿不到 | 返回 403 insufficient_scope |
-| **管的问题** | token 里**能写什么** scope | token 里写的 scope **能访问什么** API |
+| **校验时机** | 颁发 token **之前** | 每次 API 调用 |
+| **校验什么** | 客户端**能不能请求**这些 scope；`client_credentials` **不得**请求 `openid`/`ticket.*` 等 USER 业务 scope | token **是否含有所需 scope**；**API 的 `delegation`（USER/APP）是否与 token 来源一致**（例如 USER 轨 API 需 `authorization_code` 签发） |
+| **失败结果** | `invalid_scope` / 拒绝换票 | `403`（`insufficient_scope` / `invalid_token` 等） |
+| **管的问题** | token 里**能写什么**、grant 与 scope **能否组合** | 凭据**能进哪类路由**、是否**越权调用另一类 API** |
 
 **去掉第一道（不同步到授权服务器）的后果**：
 
-如果 `order.read` 没有同步到 `oauth2_registered_client.scopes`，客户端请求 `/oauth2/authorize?scope=order.read` 时，SAS 会直接报 `invalid_scope`，授权流程中断——客户端**根本拿不到带 order.read 的 token**，网关的 scope 校验永远没有机会执行。
+若 `partner.order.read` 未写入 `oauth2_registered_client.scopes`，合作方在 `/oauth2/token`（`client_credentials`）阶段即失败，**拿不到**带该 scope 的 token。
 
-**去掉第二道（网关不校验 scope）的后果**：
+**去掉第二道（网关不校验 scope / 不校验委托类型）的后果**：
 
-即使 token 中只有 `order.read`，客户端也可以访问需要 `order.write` 的 API——因为没有任何组件在 API 访问时比对 token scope 与 API 要求。
+- 仅凭 `order.read` 无法区分应走 B2C 还是 Partner，若路由曾经混用，可能出现**用错误轨道 token 访问错误资源范围**的风险（scope 字符串已分离为 `order.read` vs `partner.order.read`，网关必须校验 **scope + 路由前缀/ `delegation`**）。
 
-**典型场景——用户只同意了部分 scope**：
+**典型场景——用户只同意了部分 USER scope**：
 
 ```
 客户端请求 scope=openid order.read order.write
-  → 第一道（AS）：order.read ✅ order.write ✅（都在 registered_client.scopes 中）
-  → Consent 页：用户只勾选了 order.read，没勾 order.write
-  → 颁发 token scope: openid order.read（不含 order.write）
-  → 访问 POST /orders（需要 order.write）
-  → 第二道（网关）：token 没有 order.write → ❌ 403 insufficient_scope
+  → 第一道（AS）：二者均在 registered_client.scopes 中 → 进入 Consent
+  → 用户只同意 order.read
+  → access_token scope: openid order.read
+  → POST /api/b2c/orders 需要 order.write
+  → 网关：❌ 403 insufficient_scope
 ```
 
-这个场景中，两道关卡各拦截了不同的问题：AS 确保只有经过审批的 scope 才能写进 token，网关确保 token 的 scope 与 API 要求匹配。
-
-> **同步的本质**：把 API Market 的审批结果（"允许这个客户端请求什么 scope"）转化为 SAS 能识别的格式（`registered_client.scopes`），让 SAS 在颁发 token 时就能做第一道拦截，而不是等到网关才发现问题。
+> **同步的本质**：把 API Market 的审批结果写入 `oauth2_registered_client.scopes`；**USER 与 APP 的 scope 分轨命名**，避免审批与运行时语义漂移。
 
 ---
 
@@ -426,23 +488,25 @@ erDiagram
 
     SCOPE_DEFINITION {
         bigint id PK
-        varchar scope_name "ticket.read"
+        varchar scope_name "ticket.read / partner.ticket.read"
         varchar description "查询门票"
-        varchar scope_category "IDENTITY / BUSINESS"
+        varchar scope_category "IDENTITY / BUSINESS_USER / BUSINESS_APP"
         varchar scope_level "IMPLICIT / IDENTITY / READ / WRITE"
         varchar business_domain "ticket"
         varchar operation_type "read"
+        varchar delegation "USER / APP / IDENTITY"
         boolean is_silent "false"
-        varchar consent_default "REQUIRED / CHECKED / UNCHECKED"
+        varchar consent_default "REQUIRED / CHECKED / UNCHECKED / N_A"
     }
 
     API_DEFINITION ||--o{ API_SCOPE : "需要"
     API_DEFINITION {
         bigint id PK
-        varchar api_name "门票列表"
-        varchar api_path "/tickets/**"
+        varchar api_name "门票列表(B2C)"
+        varchar api_path "/api/b2c/tickets/**"
         varchar http_method "GET"
         varchar service_id "ticket-service"
+        varchar delegation "USER / APP"
     }
 
     API_SCOPE {
@@ -456,7 +520,7 @@ erDiagram
         bigint id PK
         varchar client_id "ota-client"
         bigint scope_id FK
-        varchar grant_type "client_credentials / authorization_code / both"
+        varchar delegation "USER / APP"
         varchar approval_status "AUTO / PENDING / APPROVED / REJECTED"
     }
 ```
@@ -465,76 +529,105 @@ erDiagram
 
 **scope_definition**
 
-| id | scope_name | description | scope_category | scope_level | business_domain | is_silent | consent_default |
-|----|-----------|-------------|---------------|-------------|-----------------|-----------|----------------|
-| 0 | openid | 用户唯一标识 | IDENTITY | IMPLICIT | - | true | REQUIRED |
-| 1 | profile | 用户基本信息 | IDENTITY | IDENTITY | - | false | CHECKED |
-| 2 | phone | 用户手机号 | IDENTITY | IDENTITY | - | false | UNCHECKED |
-| 3 | email | 用户邮箱 | IDENTITY | IDENTITY | - | false | UNCHECKED |
-| 4 | ticket.read | 查询门票 | BUSINESS | READ | ticket | false | CHECKED |
-| 5 | ticket.write | 购买/退票 | BUSINESS | WRITE | ticket | false | UNCHECKED |
-| 6 | annual-card.read | 查询年卡 | BUSINESS | READ | annual-card | false | CHECKED |
-| 7 | annual-card.write | 购买/续费年卡 | BUSINESS | WRITE | annual-card | false | UNCHECKED |
-| 8 | order.read | 查询订单 | BUSINESS | READ | order | false | CHECKED |
-| 9 | order.write | 创建/取消订单 | BUSINESS | WRITE | order | false | UNCHECKED |
-| 10 | reservation.read | 查询预约 | BUSINESS | READ | reservation | false | CHECKED |
-| 11 | reservation.write | 创建/取消预约 | BUSINESS | WRITE | reservation | false | UNCHECKED |
-| 12 | verification.read | 查询核销记录 | BUSINESS | READ | verification | false | CHECKED |
-| 13 | verification.write | 执行核销 | BUSINESS | WRITE | verification | false | UNCHECKED |
-| 14 | member.read | 查询会员信息 | BUSINESS | READ | member | false | CHECKED |
-| 15 | member.write | 修改会员/积分 | BUSINESS | WRITE | member | false | UNCHECKED |
-| 16 | park.read | 游园信息 | BUSINESS | READ | park | false | CHECKED |
-| 17 | payment.read | 查询支付记录 | BUSINESS | READ | payment | false | CHECKED |
-| 18 | payment.write | 发起支付/退款 | BUSINESS | WRITE | payment | false | UNCHECKED |
-| 19 | notification.read | 读取通知 | BUSINESS | READ | notification | false | CHECKED |
-| 20 | notification.write | 发送通知 | BUSINESS | WRITE | notification | false | UNCHECKED |
+| id | scope_name | description | scope_category | delegation | scope_level | business_domain | is_silent | consent_default |
+|----|-----------|-------------|----------------|------------|-------------|-----------------|-----------|----------------|
+| 0 | openid | 用户唯一标识 | IDENTITY | IDENTITY | IMPLICIT | - | true | REQUIRED |
+| 1 | profile | 用户基本信息 | IDENTITY | IDENTITY | IDENTITY | - | false | CHECKED |
+| 2 | phone | 用户手机号 | IDENTITY | IDENTITY | IDENTITY | - | false | UNCHECKED |
+| 3 | email | 用户邮箱 | IDENTITY | IDENTITY | IDENTITY | - | false | UNCHECKED |
+| 4 | ticket.read | 查询门票（用户委托） | BUSINESS_USER | USER | READ | ticket | false | CHECKED |
+| 5 | ticket.write | 购买/退票（用户委托） | BUSINESS_USER | USER | WRITE | ticket | false | UNCHECKED |
+| 6 | annual-card.read | 查询年卡（用户委托） | BUSINESS_USER | USER | READ | annual-card | false | CHECKED |
+| 7 | annual-card.write | 购买/续费年卡（用户委托） | BUSINESS_USER | USER | WRITE | annual-card | false | UNCHECKED |
+| 8 | order.read | 查询订单（用户委托） | BUSINESS_USER | USER | READ | order | false | CHECKED |
+| 9 | order.write | 创建/取消订单（用户委托） | BUSINESS_USER | USER | WRITE | order | false | UNCHECKED |
+| 10 | reservation.read | 查询预约（用户委托） | BUSINESS_USER | USER | READ | reservation | false | CHECKED |
+| 11 | reservation.write | 创建/取消预约（用户委托） | BUSINESS_USER | USER | WRITE | reservation | false | UNCHECKED |
+| 12 | verification.read | 用户侧核销查询 | BUSINESS_USER | USER | READ | verification | false | CHECKED |
+| 13 | verification.write | 用户侧核销写 | BUSINESS_USER | USER | WRITE | verification | false | UNCHECKED |
+| 14 | member.read | 查询会员（用户委托） | BUSINESS_USER | USER | READ | member | false | CHECKED |
+| 15 | member.write | 会员/积分（用户委托） | BUSINESS_USER | USER | WRITE | member | false | UNCHECKED |
+| 16 | park.read | 游园信息（用户轨） | BUSINESS_USER | USER | READ | park | false | CHECKED |
+| 17 | payment.read | 查询支付（用户委托） | BUSINESS_USER | USER | READ | payment | false | CHECKED |
+| 18 | payment.write | 发起支付/退款（用户委托） | BUSINESS_USER | USER | WRITE | payment | false | UNCHECKED |
+| 19 | notification.read | 读取通知（用户委托） | BUSINESS_USER | USER | READ | notification | false | CHECKED |
+| 20 | notification.write | 写入通知（用户委托） | BUSINESS_USER | USER | WRITE | notification | false | UNCHECKED |
+| 21 | partner.ticket.read | 查询门票（应用身份） | BUSINESS_APP | APP | READ | ticket | false | N_A |
+| 22 | partner.ticket.write | 上下架/锁票等（应用身份） | BUSINESS_APP | APP | WRITE | ticket | false | N_A |
+| 23 | partner.annual-card.read | 查询年卡规则（应用身份） | BUSINESS_APP | APP | READ | annual-card | false | N_A |
+| 24 | partner.annual-card.write | 年卡受理（应用身份） | BUSINESS_APP | APP | WRITE | annual-card | false | N_A |
+| 25 | partner.order.read | 查询/对账订单（应用身份） | BUSINESS_APP | APP | READ | order | false | N_A |
+| 26 | partner.order.write | 系统间下单/退单（应用身份） | BUSINESS_APP | APP | WRITE | order | false | N_A |
+| 27 | partner.reservation.read | 预约查询（应用身份） | BUSINESS_APP | APP | READ | reservation | false | N_A |
+| 28 | partner.reservation.write | 预约写入（应用身份） | BUSINESS_APP | APP | WRITE | reservation | false | N_A |
+| 29 | partner.verification.read | 核销记录拉取（应用身份） | BUSINESS_APP | APP | READ | verification | false | N_A |
+| 30 | partner.verification.write | 闸机核销等（应用身份） | BUSINESS_APP | APP | WRITE | verification | false | N_A |
+| 31 | partner.member.read | 会员批量查询（应用身份） | BUSINESS_APP | APP | READ | member | false | N_A |
+| 32 | partner.member.write | 会员批量运营（应用身份） | BUSINESS_APP | APP | WRITE | member | false | N_A |
+| 33 | partner.park.read | 游园公开数据（应用身份） | BUSINESS_APP | APP | READ | park | false | N_A |
+| 34 | partner.payment.read | 支付对账（应用身份） | BUSINESS_APP | APP | READ | payment | false | N_A |
+| 35 | partner.payment.write | 支付指令（应用身份） | BUSINESS_APP | APP | WRITE | payment | false | N_A |
+| 36 | partner.notification.read | 通知拉取（应用身份） | BUSINESS_APP | APP | READ | notification | false | N_A |
+| 37 | partner.notification.write | 通知投递（应用身份） | BUSINESS_APP | APP | WRITE | notification | false | N_A |
 
-**api_definition**
+**api_definition**（示例：`delegation` 必须与 `api_path` 前缀、绑定的 scope `delegation` 一致；其余域按同构扩展）
 
-| id | api_name | api_path | http_method | service_id |
-|----|----------|----------|-------------|------------|
-| 1 | 用户身份 | /userinfo | GET | user-service |
-| 2 | 用户手机号 | /user/phone | GET | user-service |
-| 3 | 门票列表 | /tickets/** | GET | ticket-service |
-| 4 | 购买门票 | /tickets | POST | ticket-service |
-| 5 | 退票 | /tickets/*/refund | POST | ticket-service |
-| 6 | 年卡信息 | /annual-cards/** | GET | annual-card-service |
-| 7 | 购买年卡 | /annual-cards | POST | annual-card-service |
-| 8 | 订单查询 | /orders/** | GET | order-service |
-| 9 | 创建订单 | /orders | POST | order-service |
-| 10 | 预约查询 | /reservations/** | GET | reservation-service |
-| 11 | 创建预约 | /reservations | POST | reservation-service |
-| 12 | 核销 | /verifications/verify | POST | verification-service |
-| 13 | 核销记录 | /verifications/** | GET | verification-service |
-| 14 | 会员信息 | /members/** | GET | member-service |
-| 15 | 积分操作 | /members/points/** | POST | member-service |
-| 16 | 游园信息 | /park/** | GET | park-service |
-| 17 | 发起支付 | /payments/charge | POST | payment-service |
-| 18 | 退款 | /payments/refund | POST | payment-service |
+| id | api_name | api_path | http_method | service_id | delegation |
+|----|----------|----------|-------------|------------|------------|
+| 1 | 用户身份 | `/api/b2c/userinfo` | GET | user-service | USER |
+| 2 | 用户手机号 | `/api/b2c/user/phone` | GET | user-service | USER |
+| 3 | 门票列表(B2C) | `/api/b2c/tickets/**` | GET | ticket-service | USER |
+| 4 | 购买门票(B2C) | `/api/b2c/tickets` | POST | ticket-service | USER |
+| 5 | 退票(B2C) | `/api/b2c/tickets/*/refund` | POST | ticket-service | USER |
+| 6 | 年卡信息(B2C) | `/api/b2c/annual-cards/**` | GET | annual-card-service | USER |
+| 7 | 购买年卡(B2C) | `/api/b2c/annual-cards` | POST | annual-card-service | USER |
+| 8 | 订单查询(B2C) | `/api/b2c/orders/**` | GET | order-service | USER |
+| 9 | 创建订单(B2C) | `/api/b2c/orders` | POST | order-service | USER |
+| 10 | 预约查询(B2C) | `/api/b2c/reservations/**` | GET | reservation-service | USER |
+| 11 | 创建预约(B2C) | `/api/b2c/reservations` | POST | reservation-service | USER |
+| 12 | 核销(B2C) | `/api/b2c/verifications/**` | POST | verification-service | USER |
+| 13 | 核销记录(B2C) | `/api/b2c/verifications/**` | GET | verification-service | USER |
+| 14 | 会员信息(B2C) | `/api/b2c/members/**` | GET | member-service | USER |
+| 15 | 积分操作(B2C) | `/api/b2c/members/points/**` | POST | member-service | USER |
+| 16 | 游园信息(B2C) | `/api/b2c/park/**` | GET | park-service | USER |
+| 17 | 发起支付(B2C) | `/api/b2c/payments/charge` | POST | payment-service | USER |
+| 18 | 退款(B2C) | `/api/b2c/payments/refund` | POST | payment-service | USER |
+| 101 | 门票列表(Partner) | `/api/partner/tickets/**` | GET | ticket-service | APP |
+| 102 | 购买/库存(Partner) | `/api/partner/tickets/**` | POST | ticket-service | APP |
+| 103 | 订单查询(Partner) | `/api/partner/orders/**` | GET | order-service | APP |
+| 104 | 订单写入(Partner) | `/api/partner/orders/**` | POST | order-service | APP |
+| 105 | 核销执行(Partner) | `/api/partner/verifications/verify` | POST | verification-service | APP |
+| 106 | 游园信息(Partner) | `/api/partner/park/**` | GET | park-service | APP |
 
 **api_scope**
 
 | id | api_id | scope_id | require_type | 说明 |
 |----|--------|----------|-------------|------|
-| 1 | 1 | 0 | ALL | /userinfo 至少需要 openid |
+| 1 | 1 | 0 | ALL | `/api/b2c/userinfo` 至少需要 openid |
 | 2 | 1 | 1 | ANY | 有 profile 则返回更多信息 |
 | 3 | 2 | 2 | ALL | 手机号必须 phone scope |
-| 4 | 3 | 4 | ALL | 门票列表需要 ticket.read |
-| 5 | 4 | 5 | ALL | 购买门票需要 ticket.write |
-| 6 | 5 | 5 | ALL | 退票需要 ticket.write |
+| 4 | 3 | 4 | ALL | B2C 门票列表需要 ticket.read |
+| 5 | 4 | 5 | ALL | B2C 购票需要 ticket.write |
+| 6 | 5 | 5 | ALL | B2C 退票需要 ticket.write |
 | 7 | 6 | 6 | ALL | |
 | 8 | 7 | 7 | ALL | |
 | 9 | 8 | 8 | ALL | |
 | 10 | 9 | 9 | ALL | |
 | 11 | 10 | 10 | ALL | |
 | 12 | 11 | 11 | ALL | |
-| 13 | 12 | 13 | ALL | 核销需要 verification.write |
+| 13 | 12 | 13 | ALL | 用户侧写操作（依实际拆分） |
 | 14 | 13 | 12 | ALL | |
 | 15 | 14 | 14 | ALL | |
 | 16 | 15 | 15 | ALL | |
 | 17 | 16 | 16 | ALL | |
 | 18 | 17 | 18 | ALL | |
 | 19 | 18 | 18 | ALL | |
+| 30 | 101 | 21 | ALL | Partner 门票读需要 partner.ticket.read |
+| 31 | 102 | 22 | ALL | Partner 门票写需要 partner.ticket.write |
+| 32 | 103 | 25 | ALL | Partner 订单读需要 partner.order.read |
+| 33 | 104 | 26 | ALL | Partner 订单写需要 partner.order.write |
+| 34 | 105 | 30 | ALL | Partner 核销写需要 partner.verification.write |
+| 35 | 106 | 33 | ALL | Partner 游园公开数据需要 partner.park.read |
 
 ---
 
@@ -543,31 +636,29 @@ erDiagram
 ### 网关校验逻辑（伪代码）
 
 ```java
-// 网关 ScopeAuthorizationFilter 核心逻辑
+// 网关 ScopeAuthorizationFilter + 委托轨道（伪代码）
 public boolean checkScope(HttpServletRequest request, Jwt jwt) {
-    // 1. 提取请求信息
-    String path = request.getRequestURI();      // /tickets
-    String method = request.getMethod();         // POST
+    String path = request.getRequestURI();       // /api/b2c/tickets/...
+    String method = request.getMethod();         // GET
 
-    // 2. 查 API Market：该 API 需要什么 scope
-    List<ScopeRequirement> requirements = apiMarketService.getRequiredScopes(path, method);
-    // → [{scope: "ticket.write", requireType: "ALL"}]
+    ApiEndpointMeta api = apiMarketService.resolve(path, method);
+    // → 所需 scope 列表、delegation=USER | APP、grant 期望=authorization_code | client_credentials
 
-    // 3. 如果没有 scope 要求，直接放行
-    if (requirements.isEmpty()) {
+    if (api.getRequiredScopes().isEmpty()) {
         return true;
     }
 
-    // 4. 提取 token 中的 scope
-    Set<String> tokenScopes = jwt.getClaimAsStringList("scope");
-    // → ["openid", "profile", "ticket.read"]
+    // 令牌轨道与 API 轨道一致：如 USER 轨 API 应使用 authorization_code 签发的访问令牌
+    if (!delegationMatches(jwt, api.getDelegation(), api.getExpectedGrant())) {
+        return false;
+    }
 
-    // 5. 按组校验
-    // ALL 组：token 必须包含全部
-    // ANY 组：token 包含任一即可
-    return matchScopes(tokenScopes, requirements);
+    Set<String> tokenScopes = jwt.getClaimAsStringList("scope");
+    return matchScopes(tokenScopes, api.getRequiredScopes(), api.getRequireType());
 }
 ```
+
+> **实现提示**：`delegationMatches` 可读 `grant_type`（由 SAS 写入 JWT 自定义 claim）或 `authorized_party` / `token_use` 等**你们统一约定**的字段；**不要**仅靠 `sub` 是否像 UUID 来推断。
 
 ### 授权服务器静默判断逻辑
 
@@ -591,11 +682,11 @@ public boolean requiresConsent(Set<String> requestedScopes) {
 | **静默判断** | 只有 `openid` 时不弹 Consent，直接返回 code | scope=`openid` → 静默 |
 | **非静默判断** | 包含任何非 `openid` 的 scope 时弹 Consent | scope=`openid profile` → 弹窗 |
 | **openid 自动包含** | authorization_code 流程中 `openid` 始终在 token 中 | 即使不显式请求也会包含 |
-| **read 不包含 write** | `ticket.read` 只能访问 GET 接口 | `ticket.read` 不能 POST /tickets |
-| **write 不包含 read** | `ticket.write` 只能访问写接口 | `ticket.write` 不能 GET /tickets |
-| **身份 scope 仅限 authorization_code** | client_credentials 模式不能申请 `profile`、`phone` | 服务器间调用无用户概念 |
-| **openid 无业务权限** | `openid` 只能访问 /userinfo（仅 sub） | `openid` 不能访问 /tickets |
-| **未配置 scope 的 API 直接放行** | API Market 没有该 API 的 scope 配置 | 公开接口无需 scope |
+| **read 不包含 write（同轨）** | `ticket.read` 不能替代 `ticket.write`；`partner.*` 同理 | 读写 scope 分离 |
+| **身份 scope 仅限 USER 轨** | `profile`、`phone`、`email` 只能通过 `authorization_code` 进入 token | `client_credentials` 拒绝 |
+| **业务 scope 分轨** | `ticket.*` 仅 USER；`partner.ticket.*` 仅 APP | 禁止交叉换票 |
+| **openid 无用户业务权限** | `openid` 仅用户身份/最小 userinfo | 不能访问 `/api/b2c/tickets/**` |
+| **未配置 scope 的 API** | API Market 无记录 | 默认拒绝或显式标记公开（二选一） |
 
 ---
 
@@ -632,20 +723,20 @@ sequenceDiagram
 
     Note over User,RS: 场景三：用 token 访问门票 API
 
-    App->>+GW: 15. POST /tickets<br/>Authorization: Bearer at-yyy
+    App->>+GW: 15. POST /api/b2c/tickets<br/>Authorization: Bearer at-yyy
     GW->>GW: 16. 验证 JWT 签名 ✓
-    GW->>GW: 17. 提取 scope: openid profile ticket.read ticket.write
-    GW->>+AM: 18. 查询：POST /tickets → 需要 ticket.write
+    GW->>GW: 17. 提取 scope: openid profile ticket.read ticket.write；delegation=USER
+    GW->>+AM: 18. 查询：POST /api/b2c/tickets → 需要 ticket.write + delegation=USER
     AM-->>-GW: 19. 需要 ticket.write
-    GW->>GW: 20. 比对：✅ ticket.write ∈ token scope
+    GW->>GW: 20. 比对：✅ ticket.write ∈ token scope，轨道一致
     GW->>+RS: 21. 转发请求到 ticket-service
     RS-->>-GW: 22. 200 OK 返回购票结果
     GW-->>-App: 23. 200 OK
 
     Note over User,RS: 场景四：scope 不足（仅有 ticket.read）
 
-    App->>+GW: 24. POST /tickets<br/>Authorization: Bearer at-zzz<br/>(scope: openid ticket.read)
-    GW->>+AM: 25. 查询：POST /tickets → 需要 ticket.write
+    App->>+GW: 24. POST /api/b2c/tickets<br/>Authorization: Bearer at-zzz<br/>(scope: openid ticket.read)
+    GW->>+AM: 25. 查询：POST /api/b2c/tickets → 需要 ticket.write
     AM-->>-GW: 26. 需要 ticket.write
     GW->>GW: 27. 比对：❌ ticket.write ∉ token scope
     GW-->>-App: 28. 403 insufficient_scope<br/>scope=ticket.write
@@ -675,7 +766,7 @@ CREATE TABLE client_scope (
     id              BIGINT PRIMARY KEY,
     client_id       VARCHAR(100) NOT NULL,      -- 客户端标识
     scope_id        BIGINT NOT NULL,            -- → scope_definition.id
-    grant_type      VARCHAR(50),                -- client_credentials / authorization_code / both
+    delegation      VARCHAR(20),                -- USER / APP：该 scope 归属哪条轨道
     approval_status VARCHAR(20),                -- AUTO / PENDING / APPROVED / REJECTED
     created_at      TIMESTAMP,
     approved_at     TIMESTAMP
@@ -684,12 +775,13 @@ CREATE TABLE client_scope (
 
 示例数据：
 
-| id | client_id | scope_id | grant_type | approval_status |
+| id | client_id | scope_id | delegation | approval_status |
 |----|-----------|----------|------------|----------------|
-| 1 | ota-ticket | 0 (openid) | authorization_code | AUTO |
-| 2 | ota-ticket | 1 (profile) | authorization_code | AUTO |
-| 3 | ota-ticket | 4 (ticket.read) | both | APPROVED |
-| 4 | ota-ticket | 5 (ticket.write) | authorization_code | PENDING → APPROVED |
+| 1 | ota-ticket | 0 (openid) | USER | AUTO |
+| 2 | ota-ticket | 1 (profile) | USER | APPROVED |
+| 3 | ota-ticket | 4 (ticket.read) | USER | APPROVED |
+| 4 | partner-order | 25 (partner.order.read) | APP | APPROVED |
+| 5 | gate-system | 30 (partner.verification.write) | APP | APPROVED |
 
 **作用**：API Market 门户管理审批流程，记录"谁申请了什么 scope、审批到哪一步"。
 
@@ -714,7 +806,7 @@ CREATE TABLE oauth2_registered_client (
 |-----------|--------|
 | ota-ticket | `openid,profile,ticket.read,ticket.write` |
 
-**关键机制**：SAS 在颁发 token 时，会验证 `请求的 scope ⊆ registered_client.scopes`，超出范围直接报 `INVALID_SCOPE` 错误：
+**核心规则**：SAS 在颁发 token 时验证 `请求的 scope ⊆ registered_client.scopes`；并在 **`client_credentials` 请求**中拒绝任何 **`delegation=USER`** 的 scope（含身份 scope）及 **无 `partner.` 前缀**的业务 scope；在 **`authorization_code` 请求**中可拒绝 **`delegation=APP`** 的 **`partner.*`**（若你们选择强分客户端，则相应 Registered Client 根本不注册 `partner.*`）。
 
 ```java
 // OAuth2AuthorizationCodeRequestAuthenticationValidator.java
@@ -727,7 +819,7 @@ if (!allowedScopes.containsAll(requestedScopes)) {
 }
 ```
 
-> **核心规则**：客户端必须先在 API Market 申请 scope 并审批通过，scope 才会同步到 `oauth2_registered_client.scopes`，之后发起授权请求时 SAS 才允许。未申请的 scope 直接请求会被 SAS 拒绝，用户根本看不到授权页面。
+> **同步到 SAS 的前提**：API Market 审批通过后，`scope` 才会进入 `oauth2_registered_client.scopes`；未申请的 scope 在换 token 阶段即失败。
 
 ### 两层存储同步机制
 
@@ -880,11 +972,11 @@ Token 颁发阶段:
 
 | 维度 | 说明 |
 |------|------|
-| **授权模式** | client_credentials（服务器间调用） |
-| **申请的 scope** | `verification.read verification.write ticket.read` |
-| **Consent 页** | 无（client_credentials 不涉及用户授权） |
-| **审批层级** | verification.write 需人工审核 |
-| **说明** | 闸机服务不需要用户授权，由管理员分配 scope |
+| **授权模式** | `client_credentials` |
+| **申请的 scope** | `partner.verification.read` `partner.verification.write`（及按需 `partner.ticket.read`） |
+| **Consent 页** | 无 |
+| **审批层级** | `partner.verification.write` 高敏人工审核 |
+| **说明** | 仅服务端持有；路由走 `/api/partner/**` |
 
 ### 场景3：小程序静默登录 + 会员信息
 
@@ -899,9 +991,9 @@ Token 颁发阶段:
 
 | 维度 | 说明 |
 |------|------|
-| **授权模式** | client_credentials |
-| **申请的 scope** | `park.read` |
-| **说明** | 游园信息是公共数据，park.read 自动审批，适合导览类应用 |
+| **授权模式** | `client_credentials` |
+| **申请的 scope** | `partner.park.read` |
+| **说明** | 公开类数据走应用身份轨控量计费；与用户轨 `park.read` 语义分离 |
 
 ---
 
@@ -912,10 +1004,9 @@ Token 颁发阶段:
 ```
 新增业务域只需 3 步：
 
-1. API Market 管理后台新增 scope_definition：
-   INSERT INTO scope_definition (scope_name, description, scope_category, scope_level, business_domain, operation_type, is_silent, consent_default)
-   VALUES ('parking.read', '查询停车场', 'BUSINESS', 'READ', 'parking', 'read', false, 'CHECKED'),
-          ('parking.write', '预约车位', 'BUSINESS', 'WRITE', 'parking', 'write', false, 'UNCHECKED');
+1. API Market 管理后台新增 **USER 与 APP** 两套 `scope_definition` 行，例如：
+   INSERT INTO scope_definition (..., scope_name, ..., delegation)
+   VALUES ('parking.read', ..., 'USER'), ('partner.parking.read', ..., 'APP');
 
 2. 为新 API 配置 scope 映射：
    INSERT INTO api_scope (api_id, scope_id) VALUES (新API_id, parking.read_id);
@@ -948,7 +1039,8 @@ v2 阶段：ticket.read, ticket.write, ticket.v2.read, ticket.v2.write
 | **write scope 需人工审核** | 所有 `.write` scope 必须人工审核，防止误操作（如误退票、误退款） |
 | **身份 scope 仅限 authorization_code** | `profile`、`phone`、`email` 不能分配给 client_credentials 模式 |
 | **敏感信息默认不选** | `phone`、`email` 在 Consent 页默认不勾选，用户需主动勾选 |
-| **核销操作特殊管控** | `verification.write` 需最高级别审批，核销直接关系到票务安全 |
+| **核销操作特殊管控** | `partner.verification.write`（及用户轨 `verification.write` 若开放）高敏人工审批 |
+| **双轨不混用** | `ticket.*` 仅 USER 轨 token；`partner.*` 仅 APP 轨 token |
 | **定期审计** | 管理后台展示"scope 使用统计"，识别异常调用 |
 | **scope 不可超出** | token 中的 scope 只能是 client_scope 的子集 |
 | **拒绝通配 scope** | 不允许 `*`、`all` 等通配 scope |
@@ -962,12 +1054,12 @@ v2 阶段：ticket.read, ticket.write, ticket.v2.read, ticket.v2.write
 |----------|--------|------|--------|------|------|
 | 静默授权 | ✅ `openid` | ✅ `snsapi_base` | ✅ `auth_base` | ❌ | ❌ |
 | 非静默用户信息 | `profile` | `snsapi_userinfo` | `auth_user` | ❌ | `user_info` |
-| 命名格式 | 身份: 单词<br/>业务: `域.操作` | `前缀_功能` | `前缀_功能` | `域.操作` | 混合 |
+| 命名格式 | 身份: 单词<br/>USER 业务: `域.操作`<br/>APP 业务: `partner.域.操作` |
 | 读写分离 | ✅ 业务 scope | ❌ | ❌ | ✅ | ❌ |
 | 分层审批 | ✅ 四层 | ❌ | ❌ | ❌ | ✅ 三状态 |
 | Consent 勾选状态 | ✅ 三状态 | ❌ | ❌ | ❌ | ✅ |
 | scope 与 API 映射 | ✅ 数据库配置 | N/A | N/A | 硬编码 | 能力管理 |
-| 主题乐园适配 | ✅ 门票/年卡/核销等 | ❌ | ❌ | ❌ | ❌ |
+| 主题乐园适配 | ✅ 双轨 + 九大域 | ❌ | ❌ | ❌ | ❌ |
 
 ---
 
@@ -989,11 +1081,11 @@ v2 阶段：ticket.read, ticket.write, ticket.v2.read, ticket.v2.write
 
 ### 第三阶段：全量覆盖
 
-1. **剩余业务域**：`annual-card.*`、`reservation.*`、`verification.*`、`park.read`、`payment.*`、`notification.*`
+1. **剩余业务域**：USER 轨全量 + APP 轨 `partner.*` 对称接入
 2. **网关缓存刷新**：消息总线通知机制
 3. **管理后台**：scope 使用统计、审计日志
 4. **验证**：闸机核销、年卡续费等场景
 
 ---
 
-**一句话总结**：主题乐园 scope 设计 = 微信/支付宝的「`openid` 静默 / `profile` 非静默」用户身份层 + 京东的「`业务域.read`/`业务域.write`」业务 API 层 + 抖音的「必选/默认勾选/默认不选」Consent 体验，四层审批（隐式→身份→读取→写入），身份 scope 仅限 authorization_code，业务 scope 两种模式通用，覆盖门票/年卡/订单/预约/核销/会员/游园/支付/通知九大业务域。
+**一句话总结**：主题乐园 scope 采用 **用户相关（USER，`authorization_code`：身份 + `业务域.read\|write`）与非用户相关（APP，`client_credentials`：`partner.业务域.read\|write`）双轨命名**；四层审批与抖音式 Consent 仅作用于 USER 轨；TYK 在 **scope** 之外校验 **`delegation`**，配合 `/api/b2c/**` 与 `/api/partner/**` 路由隔离，覆盖门票/年卡/订单/预约/核销/会员/游园/支付/通知九大域。
