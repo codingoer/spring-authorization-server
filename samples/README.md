@@ -12,11 +12,14 @@
 | [`samples-code-analysis.md`](./samples-code-analysis.md) | 把授权流程映射到 Spring Security / Spring Authorization Server 的关键过滤器、Provider 和 sample 源码上。适合对照代码阅读。 |
 | [`samples-scenario-api-list.md`](./samples-scenario-api-list.md) | 按“已登录/未登录、已授权/未授权”四种组合，列出每种场景下会出现的 API 请求链路与关键组件。适合排查不同分支行为。 |
 | [`oauth2-client-login-state-analysis.md`](./oauth2-client-login-state-analysis.md) | 重点解释 OAuth2 Client 的登录态、`JSESSIONID`、`SecurityContext`、`id_token`、`refresh_token` 之间的关系。适合理清会话与 token 生命周期。 |
+| [`oauth2-client-flow-selection.md`](./oauth2-client-flow-selection.md) | 说明外部/内部 Web、App、小程序、第三方服务端系统应如何选择 `authorization_code + PKCE` 或 `client_credentials`，并梳理新授权服务与旧 `ctoken-service` 的替代关系。 |
 | [`oidc-web-flow-diagrams.md`](./oidc-web-flow-diagrams.md) | 用图解方式说明 Web 客户端下的 OIDC 授权码流程、Session 分布、刷新与登出过程。适合快速看图理解。 |
 | [`oidc-app-flow-diagrams.md`](./oidc-app-flow-diagrams.md) | 对比原生 App 与 Web 的差异，说明 App 侧 OIDC + PKCE、token 存储、刷新、重新登录与登出流程。 |
 | [`scope-plan.md`](./scope-plan.md) | 结合主题乐园业务、TYK 网关、API Market 和授权服务，给出一套完整的 scope 命名、分层、审批、映射与落地方案。 |
 | [`scope-research.md`](./scope-research.md) | 调研微信、支付宝、京东、抖音等平台的 scope 设计方式，便于横向比较不同平台的授权模型。 |
 | [`api-market-gateway-scope-diagrams.md`](./api-market-gateway-scope-diagrams.md) | 聚焦 API Market + 网关集中校验 scope 的架构设计，说明 API 与 scope 的映射、网关校验链路和扩展思路。 |
+| [`authorization-cost-estimate.md`](./authorization-cost-estimate.md) | 不分阶段的整体成本评估，按完整落地范围汇总第三方接入、scope、`btoken-service` 迁移、`ctoken-service` JWT 化、我方 App/官网迁移等成本。 |
+| [`authorization-cost-phased-estimate.md`](./authorization-cost-phased-estimate.md) | 按“五阶段”评估授权服务建设成本：第三方授权认证、scope 校验、内部服务间调用、`ctoken-service` JWT 化、我方 App/官网迁移。 |
 | [`spa-client/README.md`](./spa-client/README.md) | `spa-client` 前端工程自己的启动说明，主要包含 Angular 开发、构建和测试命令。 |
 
 ## 阅读建议
